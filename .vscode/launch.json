@@ -1,0 +1,18 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "调试RSS文章生成器",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "app.rss_writer.main",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "https://www.reddit.com/r/LocalLLaMA/.rss",
+                "-o",
+                "output_article.md"
+            ]
+        }
+    ]
+}

@@ -2,6 +2,7 @@ import json
 import aiohttp
 import feedparser
 from typing import Dict, List, Optional
+import os
 
 from app.tool.base import BaseTool, ToolResult
 
@@ -38,9 +39,13 @@ class RSSFeedTool(BaseTool):
             包含解析结果的ToolResult对象
         """
         try:
+            # 从环境变量读取代理设置 (例如: export HTTP_PROXY="http://user:pass@host:port")
+            proxy_url = os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
+
             # 使用aiohttp异步获取RSS内容
             async with aiohttp.ClientSession() as session:
-                async with session.get(feed_url) as response:
+                # 在 get 请求中加入 proxy 参数
+                async with session.get(feed_url, proxy=proxy_url) as response:
                     if response.status != 200:
                         return ToolResult(
                             error=f"获取RSS feed失败: HTTP状态码 {response.status}"
@@ -78,4 +83,7 @@ class RSSFeedTool(BaseTool):
             return ToolResult(output=json.dumps(result, ensure_ascii=False, indent=2))
 
         except Exception as e:
+            # 可以在这里增加更详细的代理错误日志
+            if proxy_url and isinstance(e, aiohttp.ClientConnectorError):
+                 return ToolResult(error=f"RSS解析错误 (可能与代理 {proxy_url} 相关): {str(e)}")
             return ToolResult(error=f"RSS解析错误: {str(e)}")
