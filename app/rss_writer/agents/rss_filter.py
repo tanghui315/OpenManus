@@ -84,33 +84,24 @@ class RSSFilterAgent(ToolCallAgent):
         # 寻找最后一条助手消息
         for msg in reversed(self.memory.messages):
             if msg.role == "assistant" and msg.content:
-                # 简单的解析逻辑，可以根据实际输出格式调整
                 if "没有找到有价值的文章" in msg.content:
                     self.selected_articles = []
                     return
 
-                # 这里假设格式是每行一个链接，链接前有数字或符号
+                # 使用正则表达式查找Markdown链接 [Title](URL)
+                # \[([^\]]+)\] 匹配方括号内的标题文字 (捕获组1)
+                # \((https?://\S+)\) 匹配圆括号内的URL (捕获组2)
                 import re
-                urls = re.findall(r'https?://\S+', msg.content)
+                matches = re.findall(r'\[([^\]]+)\]\((https?://\S+)\)', msg.content)
 
-                for url in urls:
-                    # 找到对应的标题（这里是简化的逻辑）
-                    title = "未知标题"  # 默认标题
-                    lines = msg.content.split('\n')
-                    for i, line in enumerate(lines):
-                        if url in line:
-                            # 尝试从前一行或当前行提取标题
-                            if i > 0 and "http" not in lines[i-1]:
-                                title = lines[i-1].strip()
-                            else:
-                                # 从当前行提取非URL部分作为标题
-                                title_part = line.split(url)[0].strip()
-                                if title_part:
-                                    title = title_part
+                self.selected_articles = [] # 清空之前的错误解析（如果运行多次）
+                for title, url in matches:
+                     # 检查是否是Reddit链接（可选，增加精确度）
+                     # if "reddit.com" in url: # 可以取消注释这行来只选择reddit链接
+                         self.selected_articles.append({
+                             "title": title.strip(), # 去除可能的首尾空格
+                             "url": url
+                         })
 
-                    self.selected_articles.append({
-                        "title": title,
-                        "url": url
-                    })
-
+                # 解析完成后直接返回，不需要后续的旧逻辑
                 return

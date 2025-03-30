@@ -1,13 +1,15 @@
 from typing import List, Dict, Any, Optional
 import json
 import asyncio
-import traceback  # 新增导入
+import traceback
+import os
 
 from app.agent.browser import BrowserAgent
 from app.rss_writer.agents.rss_filter import RSSFilterAgent
 from app.rss_writer.agents.article_writer import ArticleWriterAgent
 from app.schema import Message
 from app.logger import logger
+from app.tool.web_extract import WebContentExtractor
 
 
 class RSSArticleWorkflow:
@@ -16,8 +18,10 @@ class RSSArticleWorkflow:
     def __init__(self):
         """初始化工作流组件"""
         self.rss_filter = RSSFilterAgent()
-        self.browser = BrowserAgent()
-        self.article_writer = ArticleWriterAgent()
+        # 不再需要使用浏览器
+        # self.browser = BrowserAgent()
+        self.article_writer = ArticleWriterAgent(max_steps=5)
+        self.web_extractor = WebContentExtractor(use_proxy=True)
 
     async def run(self, rss_url: str) -> str:
         """
@@ -57,7 +61,18 @@ class RSSArticleWorkflow:
 
             # 3. 撰写技术文章
             logger.info("步骤3: 开始撰写技术文章")
-            write_request = "基于收集到的信息，撰写一篇详细的技术文章，包括引言、主体部分和结论。"
+            write_request = """
+基于我们收集的技术信息，请撰写一篇深入、连贯且信息丰富的技术文章。
+请按照以下要求进行：
+
+1. 先分析所有信息，确定一个统一且引人入胜的核心主题
+2. 设计一个包含合适章节数量的结构，每个章节应聚焦不同技术方面
+3. 为每个章节规划具体要点和论据，确保技术准确性
+4. 各章节之间保持内容连贯，避免不必要的重复
+5. 使用恰当的技术术语，同时保持可读性
+
+目标是创建一篇对技术读者有价值的深入分析文章，既有技术深度又结构清晰。
+"""
             article = await self.article_writer.run(write_request)
             logger.info(f"文章撰写完成，长度: {len(article)} 字符")
 
@@ -72,7 +87,7 @@ class RSSArticleWorkflow:
 
     async def _collect_article_content(self) -> bool:
         """
-        收集选定文章的详细内容
+        收集选定文章的详细内容，使用WebContentExtractor直接抓取网页内容
 
         Returns:
             是否成功收集到有效信息
@@ -96,28 +111,27 @@ class RSSArticleWorkflow:
             logger.info(f"访问文章 #{i}: {title} - {url}")
 
             try:
-                # 使用浏览器访问文章并提取内容
-                browser_prompt = f"访问这个URL: {url}，并提取关键的技术信息、见解和重要细节。"
-                await self.browser.run(browser_prompt)
-
-                # 收集最后的浏览器结果
-                extracted_content = self._get_last_assistant_message(self.browser.memory.messages)
+                # 使用WebContentExtractor提取网页内容
+                cleaned_text, metadata = self.web_extractor.extract_content(url)
 
                 # 记录提取结果
-                content_preview = extracted_content[:100] + "..." if extracted_content and len(extracted_content) > 100 else extracted_content
+                content_preview = cleaned_text[:100] + "..." if cleaned_text and len(cleaned_text) > 100 else cleaned_text
                 logger.debug(f"文章 #{i} 提取内容: {content_preview}")
 
-                if extracted_content:
+                if cleaned_text:
+                    # 构建内容摘要
+                    content_summary = self.web_extractor.format_content_summary(cleaned_text, metadata)
+
                     # 将提取的内容添加到文章撰写Agent的收集信息中
                     self.article_writer.add_information(
                         source=title,
-                        content=extracted_content,
+                        content=content_summary,
                         url=url
                     )
                     success_count += 1
-                    logger.info(f"成功收集文章 #{i} '{title}' 的内容")
+                    logger.info(f"成功收集文章 #{i} '{title}' 的内容，来源: {metadata.get('content_source', '未知')}")
                 else:
-                    logger.warning(f"未能从文章 #{i} '{title}' 提取有效内容")
+                    logger.warning(f"未能从文章 #{i} '{title}' 中提取到有效内容")
             except Exception as e:
                 logger.error(f"访问文章 #{i} '{title}' 时出错: {str(e)}")
                 # 继续处理下一篇文章

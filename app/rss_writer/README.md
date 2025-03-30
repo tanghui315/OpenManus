@@ -1,66 +1,76 @@
-# RSS 文章生成器
+# RSS Writer 模块
 
-基于RSS源自动生成技术文章的模块。
+这个模块提供从RSS源自动生成技术文章的功能。它监控指定的RSS源，筛选有价值的文章，提取关键内容，并自动生成新的技术文章。
 
 ## 功能
 
-- RSS Feed解析和阅读
-- 内容价值评估和筛选
-- 文章详情抓取
-- 技术文章自动撰写
-
-## 组件
-
-- `RSSFeedTool`: RSS源解析工具
-- `RSSFilterAgent`: RSS内容评估和筛选Agent
-- `ArticleWriterAgent`: 文章规划和撰写Agent
-- `RSSArticleWorkflow`: 工作流协调器
+1. **RSS源抓取与筛选**：从指定RSS源获取最新文章，并基于相关性和价值进行筛选。
+2. **内容提取与分析**：访问筛选出的文章链接，提取有价值的技术内容。
+3. **文章自动生成**：基于提取的内容，自动撰写结构完整的技术文章。
 
 ## 使用方法
 
 ### 命令行使用
 
 ```bash
-python -m app.rss_writer.main "https://www.reddit.com/r/LocalLLaMA/.rss" -o article.md
+python -m app.rss_writer.main "https://www.reddit.com/r/LocalLLaMA/.rss" --output article.md
 ```
 
 参数:
-- `rss_url`: RSS源的URL地址（必填）
-- `-o, --output`: 输出文件路径（可选）
+- 第一个参数: RSS源URL
+- `--output` 或 `-o`: 输出文件路径
+- `--debug`: 启用详细调试日志
 
-### 编程使用
+### 代码中使用
 
 ```python
 import asyncio
 from app.rss_writer.workflow import RSSArticleWorkflow
 
-async def generate_article():
+async def main():
     workflow = RSSArticleWorkflow()
-    result = await workflow.run("https://www.reddit.com/r/LocalLLaMA/.rss")
-    print(result)
+    article = await workflow.run("https://www.reddit.com/r/LocalLLaMA/.rss")
+    print(article)
 
-asyncio.run(generate_article())
+asyncio.run(main())
 ```
 
-## 工作流程
+## 组件说明
 
-1. 读取指定的RSS Feed源
-2. 大模型评估并筛选有价值的文章
-3. 访问筛选后文章的详情页面
-4. 提取文章中的有价值信息点
-5. 大模型规划文章结构，撰写主题和各章节
-6. 输出完整的技术文章
+### 主要组件
 
-如果没有找到有价值的文章，则直接结束流程。
+1. **RSSArticleWorkflow**
+   - 协调整个文章生成流程的工作流
+   - 负责整合RSS过滤、内容提取和文章撰写等步骤
 
-## 依赖
+2. **RSSFilterAgent**
+   - 负责处理和分析RSS源
+   - 筛选出有价值的技术文章
 
-- `feedparser`: RSS解析库
-- `aiohttp`: 异步HTTP客户端库
-- OpenManus项目的其他组件
+3. **ArticleWriterAgent**
+   - 基于收集的信息撰写完整的技术文章
+   - 生成包含引言、主体和结论的结构化文章
+
+4. **WebContentExtractor**
+   - 用于从网页中提取主要文本内容
+   - 过滤掉广告、导航栏等无关内容
+   - 优先从`<main>`标签中提取内容
+   - 支持代理设置，解决网络访问限制问题
 
 ## 注意事项
 
-- 请确保RSS源URL可访问且为标准RSS格式
-- 生成的文章质量取决于源文章的质量和大模型的能力
-- 处理时间会根据RSS源大小和文章数量而变化
+- 需要安装requests和BeautifulSoup4库：`pip install requests beautifulsoup4`
+- 某些网站可能需要设置代理才能正常访问，可以通过环境变量`HTTP_PROXY`和`HTTPS_PROXY`设置
+- 默认使用7890端口的本地代理，如需修改，请编辑`main.py`中的代理设置
+
+## 扩展与自定义
+
+1. 修改RSS源过滤标准:
+   - 编辑`app/rss_writer/agents/rss_filter.py`中的系统提示和评估标准
+
+2. 调整文章撰写风格:
+   - 编辑`app/rss_writer/agents/article_writer.py`中的系统提示
+
+git fetch upstream
+
+git merge upstream/main

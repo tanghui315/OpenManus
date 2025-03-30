@@ -6,7 +6,24 @@ import json
 from typing import Optional, Any
 
 from app.rss_writer.workflow import RSSArticleWorkflow
-from app.logger import logger
+from app.logger import logger, define_log_level
+
+
+def check_required_libraries():
+    """检查和安装所需库"""
+    try:
+        import requests
+        import bs4
+    except ImportError:
+        logger.info("缺少必要的库，尝试自动安装...")
+        try:
+            import subprocess
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "requests", "beautifulsoup4"])
+            logger.info("依赖库安装成功")
+        except Exception as e:
+            logger.error(f"安装依赖库失败: {str(e)}")
+            logger.error("请手动安装依赖: pip install requests beautifulsoup4")
+            sys.exit(1)
 
 
 def print_message_details(msg_obj: Any) -> str:
@@ -95,6 +112,9 @@ async def main(rss_url: str, output_file: Optional[str] = None) -> None:
 
 def run_cli():
     """处理命令行参数并运行程序"""
+    # 检查所需库
+    check_required_libraries()
+
     parser = argparse.ArgumentParser(description="根据RSS Feed生成技术文章")
     parser.add_argument("rss_url", help="RSS Feed的URL地址")
     parser.add_argument("-o", "--output", help="输出文件的路径")
@@ -104,8 +124,9 @@ def run_cli():
 
     # 设置日志级别
     if args.debug:
-        import logging
-        logger.setLevel(logging.DEBUG)
+        # 使用define_log_level而不是setLevel
+        global logger
+        logger = define_log_level(print_level="DEBUG", logfile_level="DEBUG", name="rss_writer")
         logger.debug("已启用DEBUG日志级别")
 
     try:
