@@ -20,7 +20,7 @@ class RSSArticleWorkflow:
         self.rss_filter = RSSFilterAgent()
         # 不再需要使用浏览器
         # self.browser = BrowserAgent()
-        self.article_writer = ArticleWriterAgent(max_steps=5)
+        self.article_writer = ArticleWriterAgent(max_steps=8)
         self.web_extractor = WebContentExtractor(use_proxy=True)
 
     async def run(self, rss_url: str) -> str:
@@ -60,21 +60,22 @@ class RSSArticleWorkflow:
                 return "无法获取选定文章的详细内容，无法继续撰写文章。"
 
             # 3. 撰写技术文章
-            logger.info("步骤3: 开始撰写技术文章")
+            logger.info("步骤3: 开始撰写AI热点速报")
             write_request = """
-基于我们收集的技术信息，请撰写一篇深入、连贯且信息丰富的技术文章。
+基于我们收集的多篇文章信息，请撰写一篇"AI热点速报"。
 请按照以下要求进行：
 
-1. 先分析所有信息，确定一个统一且引人入胜的核心主题
-2. 设计一个包含合适章节数量的结构，每个章节应聚焦不同技术方面
-3. 为每个章节规划具体要点和论据，确保技术准确性
-4. 各章节之间保持内容连贯，避免不必要的重复
-5. 使用恰当的技术术语，同时保持可读性
+1. 从收集的文章中选出最有价值、最新颖的一篇作为主题，设计一个吸引读者的标题
+2. 开篇概述本期热点速报的主要内容和价值
+3. 分别详细分析每篇文章的核心技术要点和创新点
+4. 为每个技术点明确标注来源引用
+5. 最后做一个全面的技术总结，指出发展趋势或应用前景
 
-目标是创建一篇对技术读者有价值的深入分析文章，既有技术深度又结构清晰。
+文章风格应当简洁明了，便于技术人员快速获取信息。
+最终输出应该是一篇格式规范、信息丰富的"AI热点速报"。
 """
             article = await self.article_writer.run(write_request)
-            logger.info(f"文章撰写完成，长度: {len(article)} 字符")
+            logger.info(f"AI热点速报撰写完成，长度: {len(article)} 字符")
 
             return article
 

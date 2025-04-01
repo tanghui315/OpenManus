@@ -10,40 +10,41 @@ from app.tool.planning import PlanningTool
 from app.logger import logger
 
 
-SYSTEM_PROMPT = """你是一个专业的技术内容创作者，专注于创建高质量的技术文章。
+SYSTEM_PROMPT = """你是一个专业的AI技术热点分析师，专注于创建高质量的"AI热点速报"文章。
 
-你的任务是基于提供的信息来撰写一篇结构清晰、内容连贯的技术文章。遵循以下原则：
+你的任务是基于提供的多篇文章信息，撰写一篇引人入胜的AI热点速报。遵循以下特定结构：
 
-1. 内容必须基于提供的信息，不要编造事实或过度延伸有限的信息
-2. 每个章节应与前后章节保持逻辑连贯，避免重复内容
-3. 确保技术准确性和专业性，同时保持可读性
-4. 适当引用来源信息，给予出处说明
+1. 从提供的文章中选择最有价值、最新颖的一篇作为主标题，确保标题能够吸引读者
+2. 开篇概述本期热点速报将要讨论的主要内容和价值
+3. 分别详细介绍每篇文章的核心技术要点和创新点
+4. 为每个技术点分析提供明确的来源引用
+5. 最后做一个全面的技术总结，指出发展趋势或应用前景
 
 你的文章应该：
-- 有清晰的逻辑结构和章节划分
-- 各章节内容衔接自然，前后呼应
-- 提供有价值的技术见解和分析
-- 从整体到细节层层深入，引导读者理解
+- 保持技术准确性和专业性
+- 各部分逻辑清晰，重点突出
+- 风格应当简洁明了，易于技术人员快速获取信息
+- 确保为每个技术点明确标注来源
 
-最终输出应该是一篇可以直接发布的完整技术文章，没有不必要的重复内容。
+最终输出应该是一篇格式规范、信息丰富的AI热点速报，帮助读者快速了解当前AI领域的重要进展。
 """
 
-NEXT_STEP_PROMPT = """基于我们收集的信息，请开始撰写技术文章。
+NEXT_STEP_PROMPT = """基于收集的多篇文章信息，请开始撰写AI热点速报。
 
-首先分析这些信息，确定：
-1. 文章的中心主题和目标受众
-2. 合理的章节结构和逻辑框架
-3. 每个章节应涵盖的关键信息点
+首先分析所有文章，确定：
+1. 哪一篇文章最有价值，可以作为本期速报的主标题
+2. 如何构建一个引人入胜的标题来吸引读者
+3. 各篇文章的核心技术要点和创新点
 
-然后根据规划撰写文章，确保各部分内容连贯一致，没有重复。如果收集的信息不足，请直接说明。
+然后按照AI热点速报的标准格式撰写文章。
 """
 
 
 class ArticleWriterAgent(PlanningAgent):
-    """针对章节结构优化的技术文章撰写Agent"""
+    """针对AI热点速报优化的文章撰写Agent"""
 
     name: str = "article_writer"
-    description: str = "基于收集的信息撰写结构化技术文章"
+    description: str = "基于多篇文章撰写AI热点速报"
 
     system_prompt: str = SYSTEM_PROMPT
     next_step_prompt: str = NEXT_STEP_PROMPT
@@ -61,14 +62,14 @@ class ArticleWriterAgent(PlanningAgent):
     max_steps: int = 8  # 动态调整
     collected_info: List[Dict[str, Any]] = Field(default_factory=list)
 
-    # 新增：保存章节结构和内容摘要
-    chapter_structure: List[str] = Field(default_factory=list)
-    chapter_contents: Dict[int, str] = Field(default_factory=dict)
-    content_summaries: Dict[int, str] = Field(default_factory=dict)
+    # 新增：保存文章结构和内容
+    headline_article: Dict[str, Any] = Field(default_factory=dict)
+    article_sources: List[Dict[str, Any]] = Field(default_factory=list)
     article_title: str = ""
     article_intro: str = ""
+    article_sections: Dict[int, str] = Field(default_factory=dict)  # 各篇文章分析
     article_conclusion: str = ""
-    writing_stage: str = "planning"  # planning, introduction, chapters, conclusion, review
+    writing_stage: str = "planning"  # planning, headline, introduction, sections, conclusion, review
 
     async def run(self, request: Optional[str] = None) -> str:
         """
@@ -81,9 +82,9 @@ class ArticleWriterAgent(PlanningAgent):
             执行结果的字符串描述，通常是撰写的文章内容
         """
         # 重置状态
-        self.chapter_structure = []
-        self.chapter_contents = {}
-        self.content_summaries = {}
+        self.headline_article = {}
+        self.article_sources = []
+        self.article_sections = {}
         self.article_title = ""
         self.article_intro = ""
         self.article_conclusion = ""
@@ -103,7 +104,10 @@ class ArticleWriterAgent(PlanningAgent):
         # 检查是否有足够的信息来撰写文章
         if not self.collected_info:
             logger.warning("没有收集到任何信息，无法撰写文章")
-            return "没有足够的信息来撰写技术文章。请提供一些相关资料或主题。"
+            return "没有足够的信息来撰写AI热点速报。请提供一些相关文章。"
+
+        # 提取文章来源信息
+        self._extract_article_sources()
 
         # 执行Agent主流程
         try:
@@ -124,22 +128,41 @@ class ArticleWriterAgent(PlanningAgent):
                 logger.error(f"备用方案也失败: {str(fallback_error)}")
                 return f"撰写文章时出错: {str(e)}"
 
+    def _extract_article_sources(self):
+        """从收集的信息中提取文章来源信息"""
+        for info in self.collected_info:
+            if "url" in info:
+                source = {
+                    "title": info.get("source", "未知标题"),
+                    "url": info["url"],
+                }
+                self.article_sources.append(source)
+                logger.debug(f"提取文章来源: {source['title']} - {source['url']}")
+
     def _assemble_final_article(self) -> str:
-        """根据已生成的各部分内容，组装完整文章"""
+        """根据已生成的各部分内容，组装完整热点速报"""
         parts = []
 
         # 添加标题
         if self.article_title:
             parts.append(f"# {self.article_title}\n")
 
-        # 添加引言
+        # 添加引言/概述
         if self.article_intro:
             parts.append(self.article_intro)
 
-        # 添加主体章节
-        sorted_chapters = sorted(self.chapter_contents.items())
-        for _, content in sorted_chapters:
+        # 添加各篇文章分析
+        sorted_sections = sorted(self.article_sections.items())
+        for _, content in sorted_sections:
             parts.append(content)
+
+        # 添加来源列表
+        if self.article_sources:
+            parts.append("## 文章来源")
+            sources_list = []
+            for i, source in enumerate(self.article_sources, 1):
+                sources_list.append(f"{i}. [{source['title']}]({source['url']})")
+            parts.append("\n".join(sources_list))
 
         # 添加结论
         if self.article_conclusion:
@@ -147,68 +170,101 @@ class ArticleWriterAgent(PlanningAgent):
 
         return "\n\n".join(parts)
 
-    async def _analyze_and_plan_article(self) -> Tuple[str, List[str]]:
-        """分析收集的信息，确定文章主题和章节结构"""
+    async def _select_headline_and_plan(self) -> Tuple[str, List[Dict]]:
+        """从收集的文章中选择最有价值的作为标题，并规划文章结构"""
         planning_prompt = """
-基于以上收集的信息，请执行以下任务：
+基于以上收集的所有文章信息，请执行以下任务：
 
-1. 分析所有内容，确定一个明确的中心主题
-2. 为文章设计一个引人注目的标题
-3. 规划4-6个逻辑连贯的章节结构（提供章节标题和每章要点）
-4. 确保章节结构能完整覆盖关键信息，同时避免内容重复
+1. 分析所有文章，选择最有价值、最新颖、最能引起读者兴趣的一篇作为本期AI热点速报的主题
+2. 为热点速报设计一个吸引人的标题，可以适当修改原文标题使其更加吸引读者
+3. 确定如何分析每篇文章的技术要点，避免内容重复
 
 请用以下格式回复：
-标题：[文章标题]
+主标题：[设计的吸引人标题]
+选定文章：[所选文章的标题]
+选定理由：[为什么选择这篇文章作为主题]
 
-章节结构：
-1. [第一章标题]
-   - [要点1]
-   - [要点2]
-2. [第二章标题]
-   ...
+文章规划：
+1. [第一篇文章标题] - [该篇核心技术点]
+2. [第二篇文章标题] - [该篇核心技术点]
+...
 """
         self.memory.add_message(Message.user_message(planning_prompt))
         plan_response = await self.llm_chain.ainvoke(self.memory.messages, model=self.model)
 
-        # 解析响应提取标题和章节结构
-        title, chapters = self._parse_planning_response(plan_response)
-        logger.info(f"已确定文章标题: {title}")
-        logger.info(f"已规划章节结构: {', '.join(chapters)}")
+        # 解析响应提取标题和文章规划
+        title, article_plan = self._parse_headline_response(plan_response)
+        logger.info(f"已确定热点速报标题: {title}")
+        logger.info(f"已规划文章分析结构: {len(article_plan)}篇")
 
-        return title, chapters
+        return title, article_plan
 
-    def _parse_planning_response(self, response: str) -> Tuple[str, List[str]]:
-        """从规划响应中提取标题和章节结构"""
+    def _parse_headline_response(self, response: str) -> Tuple[str, List[Dict]]:
+        """从规划响应中提取标题和文章分析规划"""
         lines = response.strip().split('\n')
         title = ""
-        chapters = []
+        selected_article = ""
+        reason = ""
+        article_plan = []
+
+        # 解析模式：标题/规划
+        mode = "header"
 
         for line in lines:
             line = line.strip()
-            # 提取标题
-            if line.startswith("标题：") or line.startswith("标题:"):
-                title = line.split("：", 1)[1].strip() if "：" in line else line.split(":", 1)[1].strip()
+            if not line:
+                continue
 
-            # 提取章节标题（通常是数字开头后跟章节名）
-            elif line and line[0].isdigit() and "." in line and not line.startswith("- "):
-                # 移除序号和点，只保留章节标题
-                chapter_title = line.split(".", 1)[1].strip()
-                if chapter_title:
-                    chapters.append(chapter_title)
+            # 解析标题部分
+            if mode == "header":
+                if line.startswith("主标题"):
+                    title = line.split("：", 1)[1].strip() if "：" in line else line.split(":", 1)[1].strip()
+                elif line.startswith("选定文章"):
+                    selected_article = line.split("：", 1)[1].strip() if "：" in line else line.split(":", 1)[1].strip()
+                elif line.startswith("选定理由"):
+                    reason = line.split("：", 1)[1].strip() if "：" in line else line.split(":", 1)[1].strip()
+                elif line.startswith("文章规划"):
+                    mode = "plan"
 
-        return title, chapters
+            # 解析文章规划部分
+            elif mode == "plan" and line[0].isdigit() and "." in line:
+                # 尝试提取文章标题和核心技术点
+                try:
+                    article_info = line.split(".", 1)[1].strip()
+                    if "-" in article_info:
+                        article_title, tech_point = article_info.split("-", 1)
+                        article_plan.append({
+                            "title": article_title.strip(),
+                            "tech_point": tech_point.strip()
+                        })
+                    else:
+                        article_plan.append({
+                            "title": article_info.strip(),
+                            "tech_point": ""
+                        })
+                except Exception as e:
+                    logger.warning(f"解析文章规划行失败: {line}, 错误: {str(e)}")
+
+        # 保存选定的头条文章信息
+        self.headline_article = {
+            "title": selected_article,
+            "reason": reason
+        }
+
+        return title, article_plan
 
     async def _generate_article_without_plan(self) -> str:
         """当计划创建失败时，尝试直接生成文章"""
         direct_request = """
-由于计划创建过程中断，现在请直接基于所有提供的信息撰写一篇完整的技术文章。文章应：
+由于计划创建过程中断，现在请直接基于所有提供的信息撰写一篇完整的AI热点速报。文章应：
 
-1. 有明确的标题和引言
-2. 包含3-5个主要章节，每个章节有清晰的小标题
-3. 章节之间保持逻辑连贯，避免内容重复
-4. 以简短有力的结论结尾
+1. 从所有文章中选择最有价值的一个作为主标题，确保标题吸引人
+2. 开头概述本期速报将讨论的内容
+3. 分别分析每篇文章的核心技术要点
+4. 为每个技术点明确标注来源
+5. 以技术总结和前景展望结尾
 
-请确保内容准确、深入且有见地，同时保持整体连贯性。
+请确保内容准确、专业且有见地，同时格式符合AI热点速报的标准。
 """
         self.memory.add_message(Message.user_message(direct_request))
         response = await self.llm_chain.ainvoke(self.memory.messages, model=self.model)
@@ -241,10 +297,10 @@ class ArticleWriterAgent(PlanningAgent):
             return
 
         # 格式化信息
-        formatted_info = "## 收集到的信息\n\n"
+        formatted_info = "## 收集到的文章信息\n\n"
 
         for i, info in enumerate(self.collected_info, 1):
-            formatted_info += f"### 信息 {i}: {info['source']}\n"
+            formatted_info += f"### 文章 {i}: {info['source']}\n"
 
             if "url" in info:
                 formatted_info += f"来源: {info['url']}\n"
@@ -253,11 +309,11 @@ class ArticleWriterAgent(PlanningAgent):
 
         # 添加到记忆中
         self.memory.add_message(Message.user_message(formatted_info))
-        logger.debug(f"已将 {len(self.collected_info)} 条信息添加到记忆中")
+        logger.debug(f"已将 {len(self.collected_info)} 篇文章信息添加到记忆中")
 
     async def create_initial_plan(self, request: str) -> None:
         """
-        创建初始文章写作计划，使用动态章节规划
+        创建初始文章写作计划，针对AI热点速报格式
 
         Args:
             request: 初始请求，包含文章主题或要求
@@ -265,26 +321,26 @@ class ArticleWriterAgent(PlanningAgent):
         # 首先添加用户请求
         self.memory.add_message(Message.user_message(request))
 
-        # 分析收集的信息并确定章节结构
-        self.article_title, self.chapter_structure = await self._analyze_and_plan_article()
+        # 分析文章并选择标题、规划结构
+        self.article_title, article_plan = await self._select_headline_and_plan()
 
-        # 根据章节结构创建动态计划步骤
+        # 根据文章规划创建动态计划步骤
         plan_steps = [
-            "分析文章主题和确定标题",
-            "撰写引言部分，介绍文章主题和目的",
+            "选择最有价值的文章作为头条并设计标题",
+            "撰写热点速报开篇概述",
         ]
 
-        # 为每个章节创建步骤
-        for i, chapter in enumerate(self.chapter_structure, 1):
-            plan_steps.append(f"撰写第{i}章：{chapter}")
+        # 为每篇文章创建分析步骤
+        for i, article in enumerate(article_plan, 1):
+            plan_steps.append(f"分析第{i}篇文章: {article['title']}")
 
-        # 添加结论和审查步骤
-        plan_steps.append("撰写总结和结论部分")
-        plan_steps.append("审查全文，确保连贯性并消除重复内容")
+        # 添加结论步骤
+        plan_steps.append("撰写技术总结和前景展望")
+        plan_steps.append("审查全文，确保格式规范和内容准确")
 
         # 动态调整最大步骤数
         self.max_steps = len(plan_steps)
-        logger.info(f"根据章节规划，设置最大步骤为: {self.max_steps}")
+        logger.info(f"根据文章数量，设置最大步骤为: {self.max_steps}")
 
         # 使用PlanningTool创建计划
         plan_id = f"article_plan_{self.name}"
@@ -310,8 +366,8 @@ class ArticleWriterAgent(PlanningAgent):
                 tool_input={
                     "command": "create",
                     "plan_id": plan_id,
-                    "title": f"《{self.article_title}》文章撰写计划",
-                    "description": f"基于收集的信息撰写一篇关于《{self.article_title}》的技术文章",
+                    "title": f"《{self.article_title}》AI热点速报撰写计划",
+                    "description": f"基于收集的文章信息撰写一篇AI热点速报",
                     "steps": plan_steps
                 }
             )
@@ -321,7 +377,7 @@ class ArticleWriterAgent(PlanningAgent):
                 logger.warning(f"计划创建可能失败: {result}")
                 self.active_plan_id = None
             else:
-                logger.info(f"文章写作计划创建成功: {plan_id}")
+                logger.info(f"热点速报撰写计划创建成功: {plan_id}")
 
         except Exception as e:
             logger.error(f"创建计划时出错: {str(e)}")
@@ -333,59 +389,68 @@ class ArticleWriterAgent(PlanningAgent):
         if current_step_index is not None:
             # 根据当前步骤更新writing_stage
             if current_step_index == 0:
-                self.writing_stage = "planning"
-                next_prompt = "请分析收集的信息，确定文章主题和标题。"
+                self.writing_stage = "headline"
+                next_prompt = "请分析所有文章，选择最有价值的一篇作为头条，并设计一个吸引人的标题。"
             elif current_step_index == 1:
                 self.writing_stage = "introduction"
                 next_prompt = f"""
-请为文章《{self.article_title}》撰写引言部分。引言应：
-1. 介绍文章主题和背景
-2. 说明文章的目的和意义
-3. 简要预告文章将要讨论的主要内容
-4. 吸引读者继续阅读
+请为AI热点速报《{self.article_title}》撰写开篇概述。概述应：
+1. 简要介绍本期速报的主题和价值
+2. 概括将要分析的几篇文章的核心技术亮点
+3. 说明这些技术进展的重要性
+4. 吸引读者继续阅读后续内容
 
-引言应控制在300-500字左右，为后续章节做铺垫。
+概述应控制在300-500字左右，简明扼要，突出信息价值。
 """
-            elif 2 <= current_step_index < 2 + len(self.chapter_structure):
-                self.writing_stage = "chapters"
-                chapter_index = current_step_index - 2
-                chapter_title = self.chapter_structure[chapter_index]
+            elif 2 <= current_step_index < self.max_steps - 2:
+                self.writing_stage = "sections"
+                article_index = current_step_index - 2
 
-                # 加入前文摘要以增强连贯性
-                context = self._get_previous_content_summary(chapter_index)
+                # 获取对应的文章信息(如果有)
+                article_info = None
+                if article_index < len(self.collected_info):
+                    article_info = self.collected_info[article_index]
+
+                article_title = article_info["source"] if article_info else f"第{article_index+1}篇文章"
+                article_url = article_info.get("url", "未知来源") if article_info else "未知来源"
 
                 next_prompt = f"""
-请撰写文章《{self.article_title}》的第{chapter_index + 1}章："{chapter_title}"。
+请分析《{self.article_title}》中的第{article_index + 1}篇文章: {article_title} (来源: {article_url})
 
-{context}
+请对这篇文章进行深入分析，内容应包括：
+1. 文章介绍的技术创新点或核心发现
+2. 该技术的工作原理或关键方法
+3. 潜在的应用场景或影响
+4. 与其他技术的比较优势（如适用）
 
-请确保本章内容：
-1. 与前文内容保持连贯，避免重复已经讨论过的内容
-2. 深入探讨章节主题，提供有价值的分析和见解
-3. 如有必要，引用相关的数据、例子或信息源支持你的观点
-4. 使用清晰的小标题或段落划分，使内容易于阅读
+格式要求：
+- 使用"## [文章标题]"作为该部分的标题
+- 在文末标注来源: [文章标题](URL链接)
+- 确保分析简洁明了，重点突出
+- 控制在500字内，保持内容精炼
 """
-            elif current_step_index == 2 + len(self.chapter_structure):
+            elif current_step_index == self.max_steps - 2:
                 self.writing_stage = "conclusion"
                 next_prompt = f"""
-请为文章《{self.article_title}》撰写结论部分。结论应：
-1. 总结文章的主要观点和发现
-2. 强调文章的价值和意义
-3. 可以提出一些思考或未来展望
-4. 给读者留下深刻印象
+请为AI热点速报《{self.article_title}》撰写技术总结和前景展望。总结应：
+1. 归纳本期所有文章分析的核心技术趋势
+2. 探讨这些技术的未来发展方向
+3. 分析可能的产业影响或应用前景
+4. 提供对读者有价值的见解或建议
 
-请确保结论与文章主体内容紧密相关，避免引入全新的概念或信息。
+请确保总结与前面分析的内容保持一致，突出整体技术发展脉络。
 """
             else:
                 self.writing_stage = "review"
                 next_prompt = f"""
-请审查整篇文章《{self.article_title}》，重点检查：
-1. 内容的逻辑连贯性
-2. 是否存在重复或冗余内容
-3. 章节之间的过渡是否自然
-4. 技术准确性和专业表达
+请审查整篇AI热点速报《{self.article_title}》，重点检查：
+1. 标题是否足够吸引人
+2. 开篇概述是否简明扼要
+3. 各文章分析是否重点突出
+4. 来源引用是否明确
+5. 结论部分是否有价值和见解
 
-请提供修改建议，或直接给出优化后的完整文章。
+请直接给出优化后的完整热点速报。确保格式规范，内容专业准确。
 """
 
             # 更新提示
@@ -402,53 +467,22 @@ class ArticleWriterAgent(PlanningAgent):
         # 保存生成的内容
         current_step_index = self.current_step_index
         if current_step_index is not None:
-            if current_step_index == 0:  # 规划步骤
-                # 从结果中提取标题
-                if not self.article_title and "标题" in result:
+            if current_step_index == 0:  # 标题选择
+                if not self.article_title:
+                    # 尝试从结果中提取标题
                     lines = result.strip().split('\n')
                     for line in lines:
-                        if "标题" in line:
-                            self.article_title = line.split(":", 1)[1].strip() if ":" in line else line.split("：", 1)[1].strip()
-                            break
-            elif current_step_index == 1:  # 引言
+                        if "标题" in line or "题目" in line:
+                            parts = line.split(":", 1) if ":" in line else line.split("：", 1)
+                            if len(parts) > 1:
+                                self.article_title = parts[1].strip()
+                                break
+            elif current_step_index == 1:  # 开篇概述
                 self.article_intro = result
-                self.content_summaries[current_step_index] = self._summarize_content(result)
-            elif 2 <= current_step_index < 2 + len(self.chapter_structure):  # 章节内容
-                chapter_index = current_step_index - 2
-                self.chapter_contents[chapter_index] = result
-                self.content_summaries[current_step_index] = self._summarize_content(result)
-            elif current_step_index == 2 + len(self.chapter_structure):  # 结论
+            elif 2 <= current_step_index < self.max_steps - 2:  # 文章分析
+                article_index = current_step_index - 2
+                self.article_sections[article_index] = result
+            elif current_step_index == self.max_steps - 2:  # 技术总结
                 self.article_conclusion = result
-                self.content_summaries[current_step_index] = self._summarize_content(result)
 
         return result
-
-    def _get_previous_content_summary(self, current_chapter_index: int) -> str:
-        """获取前文内容摘要，用于增强章节间的连贯性"""
-        context_parts = []
-
-        # 添加引言摘要
-        if 1 in self.content_summaries:
-            context_parts.append(f"引言摘要：{self.content_summaries[1]}")
-
-        # 添加之前章节的摘要
-        for i in range(current_chapter_index):
-            step_index = i + 2  # 章节步骤从2开始
-            if step_index in self.content_summaries:
-                chapter_title = self.chapter_structure[i]
-                context_parts.append(f"第{i+1}章《{chapter_title}》摘要：{self.content_summaries[step_index]}")
-
-        if not context_parts:
-            return "这是文章的第一个内容章节，请确保与引言部分衔接自然。"
-
-        return "前文内容概要：\n" + "\n\n".join(context_parts) + "\n\n请基于以上内容继续撰写，确保逻辑连贯，避免重复。"
-
-    def _summarize_content(self, content: str, max_length: int = 200) -> str:
-        """生成内容摘要"""
-        # 实际项目中可以调用LLM生成摘要，这里简化处理
-        if len(content) <= max_length:
-            return content
-
-        # 简单截取前N个字符
-        summary = content[:max_length].strip() + "..."
-        return summary
