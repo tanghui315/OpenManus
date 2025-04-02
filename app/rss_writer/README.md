@@ -13,7 +13,7 @@
 ### 命令行使用
 
 ```bash
-python -m app.rss_writer.main "https://www.reddit.com/r/LocalLLaMA/.rss" --output article.md
+python -m app.rss_writer.main "https://www.reddit.com/r/LocalLLaMA/.rss" --output article.md --debug
 ```
 
 参数:

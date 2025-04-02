@@ -47,7 +47,7 @@ class RSSFilterAgent(ToolCallAgent):
 
     available_tools: ToolCollection = Field(
         default_factory=lambda: ToolCollection(
-            RSSFeedTool(), BrowserUseTool(), Terminate()
+            RSSFeedTool(),  Terminate()
         )
     )
 
