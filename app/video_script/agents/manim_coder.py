@@ -12,6 +12,7 @@ from app.agent.base import BaseAgent
 from app.schema import Message, ToolChoice
 from app.tool import ToolCollection, Terminate, WebSearch, StrReplaceEditor
 from app.logger import logger
+from app.video_script.agents.script_writer import WebExtractTool
 
 
 SYSTEM_PROMPT = """你是一位Manim动画编程专家，精通使用Manim库创建数学和技术概念的可视化动画。
@@ -47,7 +48,7 @@ class ManimCoderAgent(BaseAgent):
 
     available_tools: ToolCollection = Field(
         default_factory=lambda: ToolCollection(
-            WebSearch(), StrReplaceEditor(), Terminate()
+            WebSearch(), WebExtractTool(), StrReplaceEditor(), Terminate()
         )
     )
 
