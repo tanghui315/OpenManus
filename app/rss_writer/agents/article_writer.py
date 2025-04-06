@@ -8,7 +8,6 @@ from app.tool import ToolCollection, Terminate
 from app.tool.str_replace_editor import StrReplaceEditor
 from app.tool.web_search import WebSearch
 from app.tool.planning import PlanningTool
-from app.rss_writer.tools.rss_feed import RSSFeedTool
 from app.logger import logger
 
 
@@ -53,7 +52,7 @@ class ArticleWriterAgent(PlanningAgent):
 
     available_tools: ToolCollection = Field(
         default_factory=lambda: ToolCollection(
-            WebSearch(), StrReplaceEditor(), PlanningTool(), RSSFeedTool(), Terminate()
+            WebSearch(), StrReplaceEditor(), PlanningTool(), Terminate()
         )
     )
 
