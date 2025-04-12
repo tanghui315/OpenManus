@@ -5,15 +5,16 @@
 """
 
 from typing import List, Dict, Any, Optional
+import time
 
 from pydantic import Field
 
-from app.agent.base import BaseAgent
+from app.agent.planning import PlanningAgent
 from app.schema import Message, ToolChoice
 from app.tool import ToolCollection, Terminate, WebSearch, StrReplaceEditor
-from app.tool.web_extract import WebContentExtractor
+from app.tool.planning import PlanningTool
 from app.logger import logger
-
+from app.video_script.tools import WebExtractTool
 
 SYSTEM_PROMPT = """你是一位专业的技术教学视频脚本撰写专家，擅长将复杂的技术概念转化为清晰、有条理的视频讲解脚本。
 
@@ -30,41 +31,13 @@ SYSTEM_PROMPT = """你是一位专业的技术教学视频脚本撰写专家，�
 最终输出应当是一份可以直接用于视频制作的完整脚本，包含标题建议、章节结构和详细内容。
 """
 
-# 创建WebContentExtractor工具包装类
-class WebExtractTool:
-    """网页内容提取工具"""
-
-    name: str = "web_extract"
-    description: str = "从URL中提取主要文本内容，过滤广告等干扰内容"
-    parameters: dict = {
-        "type": "object",
-        "properties": {
-            "url": {
-                "type": "string",
-                "description": "要提取内容的网页URL"
-            },
-            "timeout": {
-                "type": "integer",
-                "description": "请求超时时间(秒)，默认为30",
-                "default": 30
-            }
-        },
-        "required": ["url"]
-    }
-
-    def __init__(self):
-        self.extractor = WebContentExtractor()
-
-    async def execute(self, url: str, timeout: int = 30) -> str:
-        """执行网页内容提取"""
-        try:
-            content, metadata = self.extractor.extract_content(url, timeout)
-            return self.extractor.format_content_summary(content, metadata)
-        except Exception as e:
-            return f"提取内容失败: {str(e)}"
+NEXT_STEP_PROMPT = """
+请按照当前计划的下一步行动。如果你需要信息，可以搜索或提取网页内容。
+确保按照技术视频脚本的结构清晰地组织内容，并标记需要可视化的部分。
+"""
 
 
-class ScriptWriterAgent(BaseAgent):
+class ScriptWriterAgent(PlanningAgent):
     """技术视频脚本撰写Agent
 
     负责根据关键字生成结构化的技术视频脚本，包括内容规划、脚本撰写和标题建议
@@ -74,21 +47,24 @@ class ScriptWriterAgent(BaseAgent):
     description: str = "根据技术关键字生成视频脚本"
 
     system_prompt: str = SYSTEM_PROMPT
+    next_step_prompt: str = NEXT_STEP_PROMPT
 
     available_tools: ToolCollection = Field(
         default_factory=lambda: ToolCollection(
-            WebSearch(), WebExtractTool(), StrReplaceEditor(), Terminate()
+            WebSearch(), WebExtractTool(), StrReplaceEditor(), PlanningTool(), Terminate()
         )
     )
 
     # 使用AUTO，允许大模型自由回答或调用工具
     tool_choices: ToolChoice = ToolChoice.AUTO
 
-    max_interactions: int = 8  # 增加交互次数以允许更深入的研究
+    max_steps: int = 30  # 从15增加到30，确保有足够步骤完成所有计划
     collected_info: List[Dict[str, Any]] = Field(default_factory=list)
     extracted_contents: List[Dict[str, Any]] = Field(default_factory=list)
+    suggested_titles: List[str] = Field(default_factory=list)
+    final_script: str = ""
 
-    async def run(self, request: str) -> str:
+    async def run(self, request: Optional[str] = None) -> str:
         """
         执行脚本撰写的主流程
 
@@ -103,158 +79,224 @@ class ScriptWriterAgent(BaseAgent):
             self.memory.clear()
             self.collected_info = []
             self.extracted_contents = []
+            self.suggested_titles = []
+            self.final_script = ""
 
             # 创建初始提示
-            logger.info(f"开始为请求撰写脚本: {request[:50]}...")
-            self.memory.add_message(Message.system_message(self.system_prompt))
-            self.memory.add_message(Message.user_message(request))
+            logger.info(f"开始为请求撰写脚本: {request[:50] if request else ''}...")
 
-            # 执行信息收集和脚本生成
-            interaction_count = 0
-            has_answer = False
-            final_response = ""
+            # 使用父类方法运行，它会调用create_initial_plan
+            result = await super().run(request)
+            logger.info(f"大模型最终返回结果(前200字符): {result[:200] if result else '空结果'}...")
 
-            # 初始化一个字典用于跟踪已经提取内容的URL
-            extracted_urls = set()
-
-            while interaction_count < self.max_interactions:
-                interaction_count += 1
-                logger.debug(f"脚本生成交互 {interaction_count}/{self.max_interactions}")
-
-                # 思考下一步行动
-                response = await self.llm.ask_tool(
-                    messages=self.memory.messages,
-                    tools=self.available_tools.to_params(),
-                    tool_choice=self.tool_choices,
-                )
-
-                # 如果有工具调用，执行工具调用
-                if response.tool_calls:
-                    # 添加工具调用到内存
-                    assistant_msg = Message.from_tool_calls(
-                        content=response.content,
-                        tool_calls=response.tool_calls
-                    )
-                    self.memory.add_message(assistant_msg)
-
-                    # 执行工具调用
-                    for tool_call in response.tool_calls:
-                        # 检查是否调用了终止工具
-                        if tool_call.function.name == "terminate":
-                            has_answer = True
-                            tool_result = await self.execute_tool(tool_call)
-                            args = self._parse_args(tool_call)
-                            final_response = args.get("output", "")
-
-                            # 添加工具结果到内存
-                            tool_msg = Message.tool_message(
-                                content=tool_result,
-                                tool_call_id=tool_call.id,
-                                name=tool_call.function.name,
-                            )
-                            self.memory.add_message(tool_msg)
-                            break
-                        elif tool_call.function.name == "web_search":
-                            # 执行搜索工具
-                            tool_result = await self.execute_tool(tool_call)
-
-                            # 存储搜索信息
-                            args = self._parse_args(tool_call)
-                            query = args.get("search_term", "")
-                            if query:
-                                self.collected_info.append({
-                                    "query": query,
-                                    "result": tool_result
-                                })
-
-                            # 解析搜索结果中的URL，建议分析
-                            urls = self._extract_urls_from_search_results(tool_result)
-                            if urls:
-                                suggest_msg = f"\n\n我找到了一些相关资源，建议提取以下URL的内容进行深入分析:\n"
-                                for i, url in enumerate(urls[:3], 1):  # 限制为前3个URL
-                                    suggest_msg += f"{i}. {url}\n"
-                                tool_result += suggest_msg
-
-                            # 添加工具结果到内存
-                            tool_msg = Message.tool_message(
-                                content=tool_result,
-                                tool_call_id=tool_call.id,
-                                name=tool_call.function.name,
-                            )
-                            self.memory.add_message(tool_msg)
-                        elif tool_call.function.name == "web_extract":
-                            # 执行内容提取工具
-                            args = self._parse_args(tool_call)
-                            url = args.get("url", "")
-
-                            # 检查URL是否已经提取过
-                            if url in extracted_urls:
-                                tool_result = f"已经提取过此URL的内容: {url}"
-                                logger.debug(tool_result)
-                            else:
-                                tool_result = await self.execute_tool(tool_call)
-                                extracted_urls.add(url)
-
-                                # 存储提取的内容
-                                self.extracted_contents.append({
-                                    "url": url,
-                                    "content": tool_result
-                                })
-
-                            # 添加工具结果到内存
-                            tool_msg = Message.tool_message(
-                                content=tool_result,
-                                tool_call_id=tool_call.id,
-                                name=tool_call.function.name,
-                            )
-                            self.memory.add_message(tool_msg)
-                        else:
-                            # 执行其他工具
-                            tool_result = await self.execute_tool(tool_call)
-
-                            # 添加工具结果到内存
-                            tool_msg = Message.tool_message(
-                                content=tool_result,
-                                tool_call_id=tool_call.id,
-                                name=tool_call.function.name,
-                            )
-                            self.memory.add_message(tool_msg)
-
-                    # 如果找到了答案，跳出循环
-                    if has_answer:
+            # 检查脚本是否生成
+            if not self.final_script and len(self.memory.messages) > 0:
+                logger.info("未通过常规方式生成脚本，尝试从记忆中恢复")
+                # 尝试从最后的助手消息中获取脚本
+                for message in reversed(self.memory.messages):
+                    if message.role == "assistant" and len(message.content) > 500:
+                        self.final_script = message.content
+                        logger.info(f"从记忆中的助手消息恢复到脚本，长度: {len(message.content)}")
                         break
-                else:
-                    # 如果没有工具调用，直接使用回复作为最终结果
-                    self.memory.add_message(Message.assistant_message(response.content))
-                    final_response = response.content
-                    break
 
-            # 如果到达最大交互次数但没有明确答案，使用最后一次响应
-            if not has_answer and not final_response:
-                # 发送最后一次请求，要求生成最终答案
-                final_request = """
-请基于已收集和分析的所有信息，生成最终的视频脚本。脚本应当包括:
-1. 3-5个吸引人的标题建议
-2. 结构化的内容（引言、背景、核心概念、工作原理、应用示例、总结）
-3. 用【可视化: 描述】内容【/可视化】标记需要可视化的概念
+            # 强制保存机制：如果最终结果足够长但final_script为空，则使用result作为最终脚本
+            if not self.final_script and result and len(result) > 500:
+                self.final_script = result
+                logger.info(f"将最终结果强制保存为脚本，长度: {len(result)}")
 
-确保脚本内容准确、全面，且适合口头表达。
-"""
-                self.memory.add_message(Message.user_message(final_request))
-
-                response = await self.llm.ask(
-                    messages=self.memory.messages,
-                    system_msgs=[Message.system_message(self.system_prompt)]
-                )
-
-                final_response = response
-
-            logger.info(f"脚本生成完成，共提取了{len(self.extracted_contents)}个页面的内容")
-            return final_response
+            # 确保返回有内容的结果
+            return self.final_script or result
 
         except Exception as e:
             logger.error(f"脚本生成过程中出错: {str(e)}")
             return f"脚本生成失败: {str(e)}"
+
+    async def create_initial_plan(self, request: str) -> None:
+        """创建初始脚本生成计划"""
+        logger.info(f"为技术关键字'{request}'创建脚本生成计划")
+
+        # 解析请求
+        keyword = request
+        audience_level = "beginner"  # 默认目标受众
+
+        # 如果请求包含受众级别信息，提取它
+        if "intermediate" in request.lower() or "中级" in request:
+            audience_level = "intermediate"
+        elif "advanced" in request.lower() or "高级" in request:
+            audience_level = "advanced"
+
+        # 创建计划步骤
+        plan_steps = [
+            "搜索相关技术信息",
+            "从搜索结果中提取和分析详细内容",
+            "规划脚本结构和核心内容点",
+            "起草脚本引言部分",
+            "编写背景知识部分",
+            "详细解释核心概念",
+            "描述技术工作原理",
+            "举例说明实际应用场景",
+            "撰写总结部分",
+            "标记需要可视化的概念和公式",
+            "生成3-5个吸引人的标题建议",
+            "整理完整脚本并进行最终优化"
+        ]
+
+        # 设置计划ID
+        plan_id = f"script_plan_{self.name}_{int(time.time())}"
+        self.active_plan_id = plan_id
+
+        # 创建请求消息
+        plan_message = f"""
+我需要创建一个技术视频脚本撰写计划，主题为"{keyword}"，目标受众为{audience_level}级别。
+请帮我创建以下步骤的计划:
+
+{chr(10).join([f"{i+1}. {step}" for i, step in enumerate(plan_steps)])}
+
+plan_id为: {plan_id}
+"""
+        # 添加到记忆
+        self.memory.add_message(Message.user_message(plan_message))
+
+        # 使用planning工具创建计划
+        try:
+            result = await self.available_tools.execute(
+                name="planning",
+                tool_input={
+                    "command": "create",
+                    "plan_id": plan_id,
+                    "title": f"《{keyword}》技术视频脚本撰写计划 ({audience_level}级别)",
+                    "description": f"基于关键字'{keyword}'撰写一份面向{audience_level}级别受众的技术视频脚本",
+                    "steps": plan_steps
+                }
+            )
+            logger.info(f"成功创建脚本撰写计划: {result}")
+        except Exception as e:
+            logger.error(f"创建计划失败: {str(e)}")
+
+    async def act(self) -> str:
+        """执行当前步骤，处理结果，并检查计划是否完成"""
+        # 得到当前消息，用于后续提取模型输出
+        last_message_index = len(self.memory.messages) - 1 if self.memory.messages else -1
+
+        # 使用父类方法执行步骤
+        result = await super().act()
+
+        # 尝试从记忆中提取最新的助手消息，这是大模型的实际输出
+        model_output = ""
+        if last_message_index >= 0 and len(self.memory.messages) > last_message_index + 1:
+            # 找到新增的助手消息
+            for i in range(last_message_index + 1, len(self.memory.messages)):
+                if self.memory.messages[i].role == "assistant":
+                    content = self.memory.messages[i].content
+                    if content and isinstance(content, str):
+                        # 过滤掉可能的工具调用部分，只保留实际文本
+                        if "function_call" not in content.lower() and "tool:" not in content.lower():
+                            model_output = content
+                            break
+
+        # 记录大模型的实际输出(如果找到)
+        if model_output:
+            logger.info(f"步骤 {self.current_step} 大模型文本输出(前200字符): {model_output[:200]}...")
+
+        # 记录步骤结果(通常是工具输出)，避免打印过长内容
+        if result:
+            logger.info(f"步骤 {self.current_step} 执行结果(前200字符): {result[:200]}...")
+
+        # 检查是否有标题建议
+        if model_output and ("标题建议" in model_output or "视频标题" in model_output):
+            # 提取标题建议
+            self._extract_titles(model_output)
+
+        # 放宽脚本保存条件，只要内容足够长，就认为可能是有价值的脚本内容
+        if model_output and len(model_output) > 500:
+            # 如果新结果更长，则替换之前的脚本
+            if len(model_output) > len(self.final_script):
+                self.final_script = model_output
+                logger.info(f"保存了脚本内容，长度: {len(model_output)} 字符")
+        elif result and len(result) > 500 and "planning" not in result.lower() and "execute" not in result.lower():
+            # 备选：如果result不是规划日志且内容足够长
+            if len(result) > len(self.final_script):
+                self.final_script = result
+                logger.info(f"从步骤结果中保存了脚本内容，长度: {len(result)} 字符")
+
+        # 检查计划是否完成
+        if self.active_plan_id:
+            try:
+                # 使用 get 命令获取计划详情
+                plan_details = await self.available_tools.execute(
+                    name="planning",
+                    tool_input={
+                        "command": "get",
+                        "plan_id": self.active_plan_id
+                    }
+                )
+
+                # 增强的计划完成检测逻辑
+                import re
+                if isinstance(plan_details, str):
+                    # 检查方式1：通过正则表达式匹配进度
+                    progress_match = re.search(r"Progress:\s+(\d+)/(\d+)\s+steps", plan_details)
+                    if progress_match:
+                        completed = int(progress_match.group(1))
+                        total = int(progress_match.group(2))
+
+                        # 如果全部步骤都已完成，或完成率超过90%且当前步骤数较多，停止Agent
+                        if (completed == total and total > 0) or (completed/total > 0.9 and self.current_step > 10):
+                            logger.info(f"检测到计划 '{self.active_plan_id}' 完成率 {completed}/{total}，将停止 Agent。")
+                            # 主动调用Terminate工具确保退出
+                            await self.available_tools.execute(name="terminate", tool_input={"status": "success"})
+                            self.current_step = self.max_steps
+                            return result
+
+                    # 检查方式2：简单字符串检查
+                    if "步骤已完成" in plan_details or "steps completed" in plan_details:
+                        if "100.0%" in plan_details or "整理完整脚本" in plan_details and "completed" in plan_details:
+                            logger.info(f"通过字符串匹配检测到计划已完成，将停止Agent。")
+                            await self.available_tools.execute(name="terminate", tool_input={"status": "success"})
+                            self.current_step = self.max_steps
+                            return result
+
+            except Exception as e:
+                logger.warning(f"检查计划状态时出错: {str(e)}。安全起见，检查步骤计数。")
+                # 添加安全检查：如果当前步骤已经超过预期的80%且已有脚本内容，考虑终止
+                if self.current_step > int(self.max_steps * 0.8) and len(self.final_script) > 1000:
+                    logger.info(f"已执行{self.current_step}/{self.max_steps}步且已生成足够长的脚本，可能接近完成，将终止Agent。")
+                    await self.available_tools.execute(name="terminate", tool_input={"status": "completed"})
+                    self.current_step = self.max_steps
+                    return result
+
+        return result
+
+    def _extract_titles(self, text: str) -> None:
+        """从文本中提取标题建议"""
+        lines = text.split('\n')
+        title_section = False
+        title_lines = []
+
+        for line in lines:
+            if ("标题建议" in line or "视频标题" in line) and not title_section:
+                title_section = True
+                title_lines.append(line)
+            elif title_section and (line.strip().startswith("-") or line.strip().startswith("•") or
+                                    line.strip().startswith("*") or
+                                    any(line.strip().startswith(f"{i}.") for i in range(1, 10))):
+                title_lines.append(line)
+            elif title_section and line.strip() and not line.strip().startswith("-") and not line.strip().startswith("•"):
+                # 如果不是列表项但不是空行，可能已经离开了标题部分
+                if not any(line.strip().startswith(f"{i}.") for i in range(1, 10)):
+                    title_section = False
+
+        # 提取标题
+        for line in title_lines:
+            line = line.strip()
+            if line and (line.startswith("-") or line.startswith("•") or line.startswith("*") or
+                        any(line.startswith(f"{i}.") for i in range(1, 10))):
+                # 清理标题文本
+                title = line.lstrip("-•* 0123456789.").strip()
+                if title and title not in self.suggested_titles:
+                    self.suggested_titles.append(title)
+
+        logger.info(f"提取到{len(self.suggested_titles)}个标题建议")
 
     def _parse_args(self, tool_call) -> Dict[str, Any]:
         """从工具调用中解析参数"""
