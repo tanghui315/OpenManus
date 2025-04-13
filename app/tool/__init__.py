@@ -11,7 +11,7 @@ from app.tool.terminal import Terminal
 from app.tool.tool_collection import ToolCollection
 from app.tool.web_extract import WebContentExtractor
 from app.tool.web_search import WebSearch
-
+from app.tool.file_saver import FileSaver
 __all__ = [
     "BaseTool",
     "Bash",
@@ -27,4 +27,5 @@ __all__ = [
     "LocalFileOperator",
     "SandboxFileOperator",
     "Terminal",
+    "FileSaver",
 ]
