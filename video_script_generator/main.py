@@ -9,6 +9,14 @@ async def main():
     parser = argparse.ArgumentParser(description="AI 技术视频脚本生成器")
     parser.add_argument("keywords", type=str, help="用于生成脚本的技术关键字 (用引号包裹，例如 '支持向量机')")
     parser.add_argument("--output_dir", type=str, default="outputs", help="存放输出脚本和缓存的目录 (相对于脚本位置)")
+    # 添加受众等级参数
+    parser.add_argument(
+        "--audience_level",
+        type=str,
+        choices=['beginner', 'intermediate', 'advanced'], # 限制可选值
+        default='intermediate', # 设置默认值
+        help="目标受众等级 (beginner, intermediate, advanced)"
+    )
     # 可以添加更多参数，例如 --target_audience="入门"
 
     args = parser.parse_args()
@@ -19,9 +27,13 @@ async def main():
     os.environ['https_proxy'] = 'http://127.0.0.1:7890'
     # --- Agent Invocation ---
     print(f"收到关键字: {args.keywords}")
+    print(f"目标受众等级: {args.audience_level}") # 打印等级信息
     # Pass the relative output directory path to the agent
     # The agent's __init__ method now handles making the path absolute/correct
-    agent = VideoScriptAgent(output_dir=args.output_dir)
+    agent = VideoScriptAgent(
+        output_dir=args.output_dir,
+        audience_level=args.audience_level # 传递参数
+    )
     # Call agent.run() instead of agent.generate_script() and await it
     final_message = await agent.run(args.keywords) # Changed method call
 

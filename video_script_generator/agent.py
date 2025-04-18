@@ -40,11 +40,13 @@ class VideoScriptAgent(ToolCallAgent):
     plan: Optional[List[str]] = None
     script_content: Dict[str, str] = {} # Stores text content per section title
     current_keywords: str = ""
-
-    # Add instance of the extractor explicitly
     web_extractor: Optional[WebContentExtractor] = None
+    # Add audience_level attribute and set default value
+    audience_level: str = "intermediate"
 
     def __init__(self, **data: Any):
+        # Extract audience_level from incoming data, if not provided use default
+        self.audience_level = data.pop("audience_level", self.audience_level)
         # Let Pydantic handle field initialization via super().__init__
         super().__init__(**data)
 
@@ -245,13 +247,20 @@ class VideoScriptAgent(ToolCallAgent):
         return structured_results
 
     async def _generate_plan(self):
-        """Generates the script plan using LLM."""
-        logger.info(f"Generating plan for keywords: {self.current_keywords}")
+        """Generates the script plan using LLM, considering the audience level."""
+        logger.info(f"Generating plan for keywords: {self.current_keywords}, Level: {self.audience_level}")
         prompt = f"""
-        Generate a logical video script plan (list of section titles) for the technical topic: '{self.current_keywords}'.
-        The plan should follow a standard educational structure: Introduction, Core Concepts (break down if complex), Examples/Applications, Conclusion.
-        Mark sections potentially suitable for Manim visualization with '(Manim)' or similar hint.
-        Output ONLY a valid JSON list of strings. Example: ["Intro", "Concept 1", "Concept 2 (Manim)", "Outro"]
+        Generate a logical video script plan (list of section titles) for the technical topic: '{self.current_keywords}', tailored for a **{self.audience_level}** audience.
+
+        Audience Level Guidance:
+        - **beginner**: Focus on high-level concepts, analogies, simple definitions, and real-world impact. Avoid deep math or complex code. Use simpler language.
+        - **intermediate**: Include core mechanisms, basic principles, relevant comparisons, simple math/code examples where helpful. Assume some technical background.
+        - **advanced**: Delve into deeper principles, complex mathematical derivations, algorithm details, nuanced trade-offs, and potentially cutting-edge research aspects. Assume strong technical background.
+
+        Instructions:
+        - The plan should follow a logical educational structure (e.g., Intro, Concepts, Examples, Conclusion).
+        - Mark sections involving math, algorithms, or complex concepts suitable for visualization **at this specific '{self.audience_level}' level** with '(Manim)'. Fewer Manim hints for beginners, potentially more complex ones for advanced.
+        - Output ONLY a valid JSON list of strings. Example: ["Intro", "Concept 1 (Manim)", "Application", "Conclusion"]
         """
         plan_str = await self._call_llm(prompt)
         try:
@@ -270,24 +279,24 @@ class VideoScriptAgent(ToolCallAgent):
             logger.error(f"Failed to parse plan JSON after cleaning: {plan_str}") # Log original string on error
             # Fallback plan
             self.plan = [
-                "1. Introduction & Hook",
-                f"2. What is {self.current_keywords}?",
-                "3. Core Concept/Mechanism (Manim)",
-                "4. Real-world Example",
-                "5. Conclusion"
+                f"1. Introduction to {self.current_keywords} ({self.audience_level})",
+                "2. Core Concept",
+                "3. Example/Application",
+                "4. Conclusion"
             ]
             logger.info(f"Using fallback plan: {self.plan}")
 
     async def _generate_titles(self):
-        """Generates title suggestions using LLM."""
-        logger.info(f"Generating titles for: {self.current_keywords}")
-        # Modified prompt for Chinese titles
+        """Generates title suggestions using LLM, considering the audience level."""
+        logger.info(f"Generating titles for: {self.current_keywords}, Level: {self.audience_level}")
         prompt = f"""
-        请根据以下计划为关于 '{self.current_keywords}' 的视频生成 3-5 个吸引人的、SEO友好的**中文**视频标题建议: {self.plan}.
-        请仅输出一个有效的 JSON 字符串列表。例如: ["中文标题 1", "中文标题 2"]
+        请根据以下计划为关于 '{self.current_keywords}' 的技术视频生成 3-5 个吸引人的、SEO友好的**中文**视频标题建议。该视频的目标受众是 **{self.audience_level}** 水平。
+        计划章节: {self.plan}.
+        标题应反映内容的深度和风格。
+        请仅输出一个有效的 JSON 字符串列表。例如: ["适合{self.audience_level}的标题 1", "标题 2"]
         """
         titles_str = await self._call_llm(prompt)
-        titles = [f"占位符标题: {self.current_keywords}"] # Fallback in Chinese
+        titles = [f"占位符标题 ({self.audience_level}): {self.current_keywords}"] # Fallback in Chinese
         try:
             # --- ADD CLEANING LOGIC HERE ---
             cleaned_titles_str = titles_str.strip()
@@ -308,39 +317,39 @@ class VideoScriptAgent(ToolCallAgent):
         except (json.JSONDecodeError, ValueError) as e:
              logger.error(f"Failed to parse titles JSON or list empty after cleaning: {e}, response: {titles_str}") # Log original string
              # Keep the Chinese fallback title
-             titles = [f"占位符标题: {self.current_keywords}"]
+             titles = [f"占位符标题 ({self.audience_level}): {self.current_keywords}"]
 
-        title_suggestions = "## 建议标题:\n\n" + "\n".join(f"- {title}" for title in titles)
+        title_suggestions = f"## 建议标题 (面向 {self.audience_level}):\n\n" + "\n".join(f"- {title}" for title in titles)
         # Initialize the file with titles
         if not await self._save_to_file(title_suggestions + f"\n\n# 暂定标题: {titles[0]}\n\n", append=False):
              raise IOError("Failed to initialize script file with titles.")
 
     async def _generate_manim_code(self, section_title: str, section_content: str) -> Optional[str]:
-        """Generates Manim code using LLM if the section hints at it."""
-        needs_manim = "(manim)" in section_title.lower() or any(k in section_content.lower() for k in ["formula", "equation", "visualize", "graph", "plot", "math", "algorithm step", "公式", "方程", "可视化", "图表", "数学", "算法步骤"]) # Added Chinese keywords
-
+        """Generates Manim code using LLM if needed, potentially considering audience level."""
+        needs_manim = "(manim)" in section_title.lower() or any(k in section_content.lower() for k in ["formula", "equation", "visualize", "graph", "plot", "math", "algorithm step", "公式", "方程", "可视化", "图表", "数学", "算法步骤"])
         if not needs_manim:
             return None
 
-        logger.info(f"Attempting to generate Manim code for section: {section_title}")
+        logger.info(f"Attempting to generate Manim code for section: {section_title} (Level: {self.audience_level})")
         prompt = f"""
-        Generate Python code using the Manim library to create a simple visualization for the concept described below related to '{self.current_keywords}'.
+        Generate Python code using the Manim library to create a visualization for the concept described below related to '{self.current_keywords}'.
+        The visualization should be suitable for a **{self.audience_level}** audience (beginner=simple analogy/core idea, intermediate=standard visualization, advanced=more detailed/complex).
         Section Title: {section_title}
         Section Content Context:
         ---
-        {section_content[:1000]}...
+        {section_content[:2000]}...
         ---
         Instructions:
         - Create a complete Manim Scene class.
         - Include necessary imports from `manim`.
-        - Keep the visualization simple and clear, illustrating the core idea.
+        - Adjust complexity based on the '{self.audience_level}' level.
         - Output ONLY the Python code block enclosed in ```python ... ```.
-        - If visualization is not feasible or too complex, output only the text "MANIM_SKIP".
+        - If visualization is not feasible or suitable for this level, output only the text "MANIM_SKIP".
         """
         manim_code_block = await self._call_llm(prompt)
 
         if "MANIM_SKIP" in manim_code_block:
-             logger.info("LLM indicated Manim code generation should be skipped for this section.")
+             logger.info(f"LLM indicated Manim code generation should be skipped for this section/level.")
              return None
         elif "```python" in manim_code_block and "class" in manim_code_block and "Scene" in manim_code_block:
             # Extract code from markdown block
@@ -372,7 +381,7 @@ class VideoScriptAgent(ToolCallAgent):
         self.script_content = {}
         self.script_file_path = None
 
-        logger.info(f"Starting script generation for keywords: {self.current_keywords}")
+        logger.info(f"Starting script generation for keywords: {self.current_keywords}, Level: {self.audience_level}")
 
         try:
             # 1. Setup File Path
@@ -402,7 +411,7 @@ class VideoScriptAgent(ToolCallAgent):
                 previous_summary = "\n".join(f"- {prev_title}: {prev_content[:150].strip()}..." # Slightly more context
                                               for prev_title, prev_content in self.script_content.items())
                 content_prompt = f"""
-                你正在为一个关于 '{self.current_keywords}' 的技术视频撰写**中文**脚本。
+                你正在为一个关于 '{self.current_keywords}' 的技术视频撰写**中文**脚本。目标受众是 **{self.audience_level}** 水平。
                 当前章节: '{section_title}'
                 先前章节摘要: {previous_summary if previous_summary else '无'}
                 本章节相关的网络搜索结果 (提取的片段，仅供参考，请用中文撰写脚本):
@@ -410,13 +419,14 @@ class VideoScriptAgent(ToolCallAgent):
                 {search_summary if search_summary else '无可用信息'}
                 ---
 
-                任务: 为 '{section_title}' 撰写**中文**旁白脚本。
-                - 确保内容准确、清晰、吸引人（口语化风格，适合视频）。
-                - 脚本必须**完全使用中文**。
+                任务: 为 '{section_title}' 撰写**中文**旁白脚本，确保内容深度和语言风格适合 **{self.audience_level}** 受众。
+                - **beginner**: 使用简单语言、类比，解释核心概念和影响，避免深入技术细节和复杂术语。
+                - **intermediate**: 解释核心机制和原理，可包含简化数学或代码示例，假设有一定技术背景。
+                - **advanced**: 深入探讨原理、数学推导、算法细节、权衡和前沿研究，使用精确术语。
+                - 脚本必须**完全使用中文**，风格口语化适合视频。
                 - 与前面章节逻辑连贯，避免不必要的重复。
                 - **充分利用**上面提供的网络搜索结果片段中的信息来丰富内容。
                 - 旁白中无需引用来源 URL。
-                - 每个核心观点争取写一到两个段落。
                 - 请仅输出本章节的**中文**旁白文本。不要包含章节标题本身。
                 """
                 section_text = await self._call_llm(content_prompt)
@@ -430,7 +440,7 @@ class VideoScriptAgent(ToolCallAgent):
 
                 self.script_content[section_title] = section_text.strip() # Store stripped content
 
-                # c. Generate Manim Code (if needed)
+                # c. Generate Manim Code (if needed, prompt now includes level)
                 manim_code = await self._generate_manim_code(section_title, section_text)
 
                 # d. Append to File
@@ -446,7 +456,7 @@ class VideoScriptAgent(ToolCallAgent):
                 logger.info(f"--- Finished Section {i+1} --- ")
 
             # 5. Finalize and Terminate
-            final_message = f"脚本生成完成。最终脚本保存在: {self.script_file_path}"
+            final_message = f"脚本生成完成 (面向 {self.audience_level})。最终脚本保存在: {self.script_file_path}" # Add level info
             logger.info(final_message)
             self.state = AgentState.FINISHED
             # # Optionally call Terminate tool if integrated into a larger flow

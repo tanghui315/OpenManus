@@ -88,7 +88,8 @@ class WebContentExtractor:
                 url,
                 headers=self.headers,
                 proxies=proxies if proxies else None,
-                timeout=timeout
+                timeout=timeout,
+                verify=False
             )
             response.raise_for_status()
 
