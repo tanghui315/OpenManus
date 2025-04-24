@@ -4,6 +4,7 @@ import json
 import hashlib
 from datetime import datetime
 from typing import List, Optional, Dict, Any
+from urllib.parse import urlparse
 
 # Import base agent and necessary tools from the existing framework
 from app.agent.toolcall import ToolCallAgent
@@ -45,9 +46,8 @@ class VideoScriptAgent(ToolCallAgent):
     audience_level: str = "intermediate"
 
     def __init__(self, **data: Any):
-        # Extract audience_level from incoming data, if not provided use default
-        self.audience_level = data.pop("audience_level", self.audience_level)
-        # Let Pydantic handle field initialization via super().__init__
+        # 从传入的 data 中提取 audience_level，如果未提供则使用默认值
+        # Let Pydantic handle audience_level via super init and the class default
         super().__init__(**data)
 
         # Explicitly initialize LLM if not already set
@@ -135,7 +135,7 @@ class VideoScriptAgent(ToolCallAgent):
             logger.error(f"Unexpected error saving file {self.script_file_path}: {e}")
             return False
 
-    async def _cached_web_search(self, query: str, num_results: int = 5) -> List[Dict]:
+    async def _cached_web_search(self, query: str, num_results: int = 10) -> List[Dict]:
         """
         Performs web search using the WebSearch tool, then uses the initialized
         WebContentExtractor to get content for each URL. Caches the final structured results.
@@ -192,36 +192,36 @@ class VideoScriptAgent(ToolCallAgent):
         # 2. Extract content for each URL using the initialized extractor instance
         if urls:
             logger.info(f"Extracting content for {len(urls)} URLs...")
-            for url in urls:
-                # --- MODIFICATION START (Refined Logic) ---
+            for item in urls:
                 url_to_extract = None
                 url_source_description = "" # For logging clarity
-
-                # Check if the item is a dictionary containing a URL
-                if isinstance(url, dict) and 'url' in url:
-                    url_value = url['url']
-                    # Ensure the extracted URL value is a string
-                    if isinstance(url_value, str):
-                        url_to_extract = url_value
-                        url_source_description = f"dict item key 'url': {url}"
-                    else:
-                        logger.warning(f"Extracted URL value is not a string: {type(url_value)} in item {url}")
-                # Otherwise, check if the item itself is a URL string
-                elif isinstance(url, str):
-                    url_to_extract = url
-                    url_source_description = f"string item: {url}"
-                # Handle other unexpected item types
+                if isinstance(item, dict) and 'url' in item:
+                    url_value = item['url']
+                    if isinstance(url_value, str): url_to_extract = url_value
+                    else: logger.warning(f"Extracted URL value is not a string: {type(url_value)} in item {item}")
+                    url_source_description = f"dict item key 'url': {item}"
+                elif isinstance(item, str):
+                    url_to_extract = item
+                    url_source_description = f"string item: {item}"
                 else:
-                    logger.warning(f"Skipping unknown item type in search results: {type(url)}")
+                    logger.warning(f"Skipping unknown item type in search results: {type(item)}")
                     continue
 
-                # Check if we successfully got a valid string URL
                 if not url_to_extract or not isinstance(url_to_extract, str):
                      logger.warning(f"Could not determine a valid string URL from search item ({url_source_description})")
                      continue
-                # --- MODIFICATION END ---
 
-                # url_to_extract is now more reliably a string
+                # --- ADD ZHIHU SKIP LOGIC HERE ---
+                try:
+                    parsed_uri = urlparse(url_to_extract)
+                    if 'zhihu.com' in parsed_uri.netloc:
+                        logger.info(f"Skipping content extraction for Zhihu URL: {url_to_extract}")
+                        continue # Skip to the next item in the loop
+                except Exception as parse_err:
+                     logger.warning(f"URL parsing failed for {url_to_extract}: {parse_err}. Attempting extraction anyway.")
+                # --- END ZHIHU SKIP LOGIC ---
+
+                # url_to_extract is now more reliably a string AND not a zhihu link
                 try:
                     content, metadata = self.web_extractor.extract_content(url_to_extract)
                     structured_results.append({
@@ -250,7 +250,7 @@ class VideoScriptAgent(ToolCallAgent):
         """Generates the script plan using LLM, considering the audience level."""
         logger.info(f"Generating plan for keywords: {self.current_keywords}, Level: {self.audience_level}")
         prompt = f"""
-        Generate a logical video script plan (list of section titles) for the technical topic: '{self.current_keywords}', tailored for a **{self.audience_level}** audience.
+        Generate a logical video script plan (list of section titles **in Chinese**) for the technical topic: '{self.current_keywords}', tailored for a **{self.audience_level}** audience.
 
         Audience Level Guidance:
         - **beginner**: Focus on high-level concepts, analogies, simple definitions, and real-world impact. Avoid deep math or complex code. Use simpler language.
@@ -259,8 +259,9 @@ class VideoScriptAgent(ToolCallAgent):
 
         Instructions:
         - The plan should follow a logical educational structure (e.g., Intro, Concepts, Examples, Conclusion).
+        - **All section titles in the list must be in Chinese (中文).**
         - Mark sections involving math, algorithms, or complex concepts suitable for visualization **at this specific '{self.audience_level}' level** with '(Manim)'. Fewer Manim hints for beginners, potentially more complex ones for advanced.
-        - Output ONLY a valid JSON list of strings. Example: ["Intro", "Concept 1 (Manim)", "Application", "Conclusion"]
+        - Output ONLY a valid JSON list of strings containing Chinese titles. Example: [\"引言\", \"核心概念一 (Manim)\", \"应用示例\", \"总结\"]
         """
         plan_str = await self._call_llm(prompt)
         try:
@@ -279,10 +280,10 @@ class VideoScriptAgent(ToolCallAgent):
             logger.error(f"Failed to parse plan JSON after cleaning: {plan_str}") # Log original string on error
             # Fallback plan
             self.plan = [
-                f"1. Introduction to {self.current_keywords} ({self.audience_level})",
-                "2. Core Concept",
-                "3. Example/Application",
-                "4. Conclusion"
+                f"1. {self.current_keywords} 简介 ({self.audience_level}水平)",
+                "2. 核心概念",
+                "3. 示例/应用",
+                "4. 总结"
             ]
             logger.info(f"Using fallback plan: {self.plan}")
 
@@ -408,7 +409,7 @@ class VideoScriptAgent(ToolCallAgent):
                 search_summary = "\n".join([f"- Title: {r.get('title', 'N/A')}\n  URL: {r.get('url', '#')}\n  Snippet: {r.get('snippet', 'N/A')}\n" for r in search_results[:5]]) # Top 3 results
 
                 # b. Generate Section Content using LLM (Modified prompt for Chinese)
-                previous_summary = "\n".join(f"- {prev_title}: {prev_content[:150].strip()}..." # Slightly more context
+                previous_summary = "\n".join(f"- {prev_title}: {prev_content[:500].strip()}..." # Slightly more context
                                               for prev_title, prev_content in self.script_content.items())
                 content_prompt = f"""
                 你正在为一个关于 '{self.current_keywords}' 的技术视频撰写**中文**脚本。目标受众是 **{self.audience_level}** 水平。

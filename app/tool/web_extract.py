@@ -79,7 +79,15 @@ class WebContentExtractor:
         # 获取代理设置
         proxies = self._get_proxies()
         proxy_info = list(proxies.values())[0] if proxies else "未使用代理"
-        logger.debug(f"使用代理: {proxy_info}")
+        logger.info(f"使用代理: {proxy_info}")
+
+        # --- 添加 Cookie 逻辑 ---
+        request_cookies = None
+        if 'zhihu.com' in parsed_url.netloc:
+            logger.info("检测到知乎域名，添加 _xsrf Cookie")
+            # 注意：硬编码 Cookie 值可能不是最佳实践，但按要求实现
+            request_cookies = {'_xsrf': 'bca5ccea-091a-4269-ae5d-805e82bebe3b','z_c0':'2|1:0|10:1743770219|4:z_c0|80:MS4xMkhjR0FBQUFBQUFtQUFBQVlBSlZUYnB3eVdqeUhHVVFjSE9KWFFvMHUyXzhxU01lTGRmVHF3PT0=|5e2590e4bae3349f5aad3d19512f2ae81763ca3230d13409b8ace7d006de1b37'}
+        # --- Cookie 逻辑结束 ---
 
         try:
             # 获取网页内容
@@ -89,7 +97,8 @@ class WebContentExtractor:
                 headers=self.headers,
                 proxies=proxies if proxies else None,
                 timeout=timeout,
-                verify=False
+                verify=False, # 保持忽略 SSL 验证
+                cookies=request_cookies # <-- 传递 Cookies
             )
             response.raise_for_status()
 
@@ -118,6 +127,9 @@ class WebContentExtractor:
 
         except requests.RequestException as e:
             logger.error(f"请求失败: {str(e)}")
+            # 特别检查 403 错误
+            if hasattr(e.response, 'status_code') and e.response.status_code == 403:
+                logger.warning(f"收到 403 Forbidden 错误，可能是 Cookie 失效或反爬策略变更。URL: {url}")
             raise
 
     def _extract_title(self, soup: BeautifulSoup) -> str:
