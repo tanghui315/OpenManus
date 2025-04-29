@@ -1,0 +1,24 @@
+[doc_server]
+host = "127.0.0.1"
+port = 8000
+
+[doc_server.llm]
+# 复用OpenManus的LLM配置
+inherit_from = "llm"
+
+[doc_server.rag]
+# RAG服务API配置
+api_base_url = "http://localhost:8001/api/rag"
+api_key = "your_rag_api_key"
+timeout = 30
+index_chunk_size = 1000
+max_tokens_per_chunk = 500
+
+[doc_server.templates]
+path = "modules/doc_server/templates"
+default_template = "requirement/general.json"
+
+[doc_server.database]
+# MongoDB连接配置
+url = "mongodb://localhost:27017"
+database = "doc_server"
